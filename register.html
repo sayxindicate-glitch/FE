@@ -367,7 +367,7 @@
             submitBtn.disabled = true;
 
             const isLocalhost = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
-            const BASE_URL = isLocalhost ? 'http://127.0.0.1:10000' : 'https://api-gudang-kamu.onrender.com';
+            const BASE_URL = isLocalhost ? 'http://127.0.0.1:10000' : '';
 
             try {
                 const response = await fetch(`${BASE_URL}/api/auth`, {

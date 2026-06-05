@@ -364,10 +364,8 @@
         let globalAddress = "";
         let globalPhone = "";
         
-        // Variabel untuk mempertahankan Tipe Data Asli (String/UUID atau Integer) dari Rust
         let itemToDeleteOriginalType = null;
         
-        // Variabel untuk fitur Anti-Spam (Optimistic UI & Debouncing)
         let pendingDeltas = {};
         let syncTimeout = {};
         let isSyncing = 0;
@@ -472,7 +470,6 @@
             return parseInt(String(priceString).replace(/[^0-9]/g, '')) || 0; 
         }
 
-        // MENGAMBIL KATALOG PRODUK UNTUK SINKRONISASI HARGA
         async function fetchProductsCatalog() {
             try {
                 const res = await fetch(`${BASE_URL}/api/products`);
@@ -502,7 +499,6 @@
             let total = 0;
 
             cartItems.forEach(item => {
-                // SINKRONISASI HARGA DARI DATABASE KATALOG UTAMA
                 const realProduct = allProducts.find(p => String(p.id) === String(item.product_id));
                 
                 let displayPrice = item.product_price || "0";
@@ -577,7 +573,7 @@
             }
         }
 
-        // FUNGSI GANTI JUMLAH DENGAN ANTI-SPAM (OPTIMISTIC UI + DEBOUNCE)
+        // 🛡️ SOLUSI 400 BAD REQUEST: Mengirim Data Lengkap dan Format Angka Mutlak ke Rust
         async function changeQty(htmlId, delta) {
             const originalItem = cartItems.find(x => String(x.id) === String(htmlId));
             if(!originalItem) return;
@@ -585,11 +581,9 @@
             const newQty = originalItem.quantity + delta;
             if(newQty < 1) return confirmDelete(htmlId);
 
-            // 1. UPDATE LAYAR INSTAN (Optimistic UI)
             originalItem.quantity = newQty;
             renderCartItems(); 
 
-            // 2. KUNCI CHECKOUT SEMENTARA
             const checkoutBtn = document.getElementById('checkoutBtn');
             isSyncing++;
             if (checkoutBtn) {
@@ -597,32 +591,42 @@
                 checkoutBtn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Menyinkronkan...';
             }
             
-            // 3. AKUMULASI KLIK
             if (!pendingDeltas[htmlId]) pendingDeltas[htmlId] = 0;
             pendingDeltas[htmlId] += delta;
 
-            // 4. RESET TIMER (Debouncing)
             if (syncTimeout[htmlId]) clearTimeout(syncTimeout[htmlId]);
 
-            // 5. TEMBAK SERVER SETELAH 0.5 DETIK USER BERHENTI KLIK
             syncTimeout[htmlId] = setTimeout(async () => {
                 const accumulatedDelta = pendingDeltas[htmlId];
                 pendingDeltas[htmlId] = 0; 
 
                 if (accumulatedDelta !== 0) {
                     try {
-                        await fetch(`${BASE_URL}/api/cart`, { 
+                        // Paksa ID menjadi Angka untuk mencegah ditolak oleh Axum Rust
+                        const safeProductId = isNaN(originalItem.product_id) ? originalItem.product_id : Number(originalItem.product_id);
+
+                        const res = await fetch(`${BASE_URL}/api/cart`, { 
                             method: 'POST', 
                             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
-                            body: JSON.stringify({ product_id: originalItem.product_id, quantity: accumulatedDelta }) 
+                            body: JSON.stringify({ 
+                                product_id: safeProductId, 
+                                quantity: Number(accumulatedDelta),
+                                product_name: String(originalItem.product_name || "Barang"),
+                                product_price: String(originalItem.product_price || "0"),
+                                product_img: String(originalItem.product_img || "")
+                            }) 
                         });
+                        
+                        if (!res.ok) {
+                            console.error("Server menolak request:", await res.text());
+                            throw new Error("Ditolak Server");
+                        }
                     } catch (e) {
                         console.error("Gagal menyinkronkan data ke server");
                     }
                 }
 
                 isSyncing--;
-                // BUKA KUNCI CHECKOUT
                 if (isSyncing === 0 && checkoutBtn) {
                     checkoutBtn.disabled = (finalTotalRp === 0 && cartItems.length > 0);
                     checkoutBtn.innerHTML = 'Buat Pesanan';
@@ -631,7 +635,6 @@
         }
 
         function confirmDelete(htmlId) { 
-            // TANGKAP TIPE DATA ASLI SEBELUM DIHAPUS (Bisa Int atau String/UUID)
             const originalItem = cartItems.find(x => String(x.id) === String(htmlId));
             itemToDeleteOriginalType = originalItem ? originalItem.id : htmlId; 
             
@@ -646,7 +649,7 @@
         async function executeDelete() {
             if(!itemToDeleteOriginalType) return;
             
-            const targetId = itemToDeleteOriginalType; // Gunakan tipe aslinya!
+            const targetId = itemToDeleteOriginalType; 
             closeDeleteModal();
             
             try {
@@ -672,7 +675,6 @@
             }
         }
 
-        // --- SISTEM ALAMAT ---
         function openAddressModal() { 
             document.getElementById('modalShipAddress').value = globalAddress; 
             document.getElementById('modalShipPhone').value = globalPhone; 
@@ -690,7 +692,6 @@
             closeAddressModal(); 
         }
 
-        // --- SISTEM VOUCHER PROMO ---
         function openPromoModal() { 
             document.getElementById('promoModal').classList.add('active'); 
             document.getElementById('modalVoucherMsg').innerText = ''; 
@@ -832,7 +833,7 @@
                 const voucherCodes = activeVouchers.map(v => v.code);
                 
                 const payloadItems = cartItems.map(x => ({
-                    product_id: x.product_id, // Tetap menggunakan tipe aslinya
+                    product_id: x.product_id, 
                     quantity: Number(x.quantity),
                     product_name: String(x.product_name || "Barang"),
                     product_price: String(x.product_price || "0")
@@ -872,9 +873,7 @@
 
         window.addEventListener('DOMContentLoaded', async () => { 
             updateNavUI(); 
-            // 1. Ambil Katalog dulu agar harganya dijamin sinkron!
             await fetchProductsCatalog(); 
-            // 2. Baru load isi keranjangnya
             loadCart(); 
         });
     </script>

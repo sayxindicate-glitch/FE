@@ -357,11 +357,8 @@
         }
         // =========================================================================
 
-        // =========================================================================
-        // PENGATURAN API URL CERDAS (Sudah diset ke Render aslimu)
-        // =========================================================================
         const isLocalhost = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
-        const BASE_URL = isLocalhost ? 'http://127.0.0.1:10000' : '';
+        const BASE_URL = isLocalhost ? 'http://127.0.0.1:10000' : 'https://rust-vjn7.onrender.com';
 
         // --- SISTEM SESI LOKAL ---
         const sessionData = localStorage.getItem('user_session');
@@ -411,7 +408,6 @@
             notifModal.classList.add('active');
         }
 
-        // --- SINKRONISASI NAVIGASI CERDAS ---
         async function updateNavUI() {
             const loginBtn = document.getElementById('navLoginBtn');
             const mobileAccountBtn = document.getElementById('mobileAccountBtn');
@@ -451,7 +447,6 @@
             }
         }
 
-        // --- SINKRONISASI BADGE ---
         async function syncBadges(token) {
             try {
                 const promoRes = await fetch(`${BASE_URL}/api/vouchers`, { headers: { 'Authorization': `Bearer ${token}` } });
@@ -548,7 +543,6 @@
                 document.getElementById('totalPriceDisplay').innerText = formatRupiah(finalTotalRp); 
             }
             
-            // Nonaktifkan tombol checkout jika keranjang berisi data rusak (harga 0)
             document.getElementById('checkoutBtn').disabled = (finalTotalRp === 0 && cartItems.length > 0);
             
             const totalQty = cartItems.reduce((s, i) => s + i.quantity, 0);
@@ -592,7 +586,8 @@
                 await fetch(`${BASE_URL}/api/cart`, { 
                     method: 'POST', 
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
-                    body: JSON.stringify({ product_id: Number(i.product_id), quantity: delta }) 
+                    // PERBAIKAN: Kirim ID utuh tanpa dipaksa jadi Angka
+                    body: JSON.stringify({ product_id: i.product_id, quantity: delta }) 
                 });
             } catch (e) {
                 console.error("Gagal sinkron qty server");
@@ -617,7 +612,8 @@
                 const res = await fetch(`${BASE_URL}/api/cart`, { 
                     method: 'DELETE', 
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
-                    body: JSON.stringify({ id: Number(id) }) 
+                    // PERBAIKAN: Kirim ID utuh tanpa dipaksa jadi Angka
+                    body: JSON.stringify({ id: id }) 
                 });
                 
                 if (!res.ok) throw new Error();
@@ -629,7 +625,6 @@
             }
         }
 
-        // --- SISTEM ALAMAT ---
         function openAddressModal() { 
             document.getElementById('modalShipAddress').value = globalAddress; 
             document.getElementById('modalShipPhone').value = globalPhone; 
@@ -652,7 +647,6 @@
             closeAddressModal(); 
         }
 
-        // --- SISTEM VOUCHER PROMO ---
         function openPromoModal() { 
             document.getElementById('promoModal').classList.add('active'); 
             document.getElementById('modalVoucherMsg').innerText = ''; 
@@ -822,7 +816,6 @@
             document.getElementById('totalPriceDisplay').innerText = formatRupiah(finalTotalRp);
         }
 
-        // --- SISTEM CHECKOUT FINAL ---
         function processCheckout() {
             if(!globalAddress || !globalPhone) {
                 return showNotification("Alamat Belum Lengkap", "Harap atur dan simpan Alamat Pengiriman dan No WA Anda terlebih dahulu.", "warning");
@@ -855,9 +848,9 @@
                         shipping_address: globalAddress, 
                         phone_number: globalPhone, 
                         total_price: formatRupiah(finalTotalRp), 
-                        // Memastikan format data items bersih sebelum dilempar ke Rust
+                        // PERBAIKAN: Kirim ID utuh tanpa dipaksa jadi Angka
                         items: cartItems.map(x => ({
-                            product_id: Number(x.product_id),
+                            product_id: x.product_id,
                             quantity: Number(x.quantity),
                             product_name: String(x.product_name),
                             product_price: String(x.product_price)

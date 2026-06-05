@@ -573,7 +573,7 @@
             }
         }
 
-        // 🛡️ SOLUSI 400 BAD REQUEST: Mengirim Data Lengkap dan Format Angka Mutlak ke Rust
+        // 🛡️ SOLUSI TIPE DATA: Mengirim data dengan Angka (Number) Murni
         async function changeQty(htmlId, delta) {
             const originalItem = cartItems.find(x => String(x.id) === String(htmlId));
             if(!originalItem) return;
@@ -602,7 +602,20 @@
 
                 if (accumulatedDelta !== 0) {
                     try {
-                        // Paksa ID menjadi Angka untuk mencegah ditolak oleh Axum Rust
+                        // KUNCI PERBAIKAN: Tarik data asli dari Katalog
+                        const realProduct = allProducts.find(p => String(p.id) === String(originalItem.product_id));
+                        let correctPrice = 0;
+                        let correctName = originalItem.product_name || "Barang";
+                        let correctImg = originalItem.product_img || "";
+
+                        if (realProduct) {
+                            correctPrice = (realProduct.is_promo && realProduct.promo_price) ? realProduct.promo_price : realProduct.price;
+                            correctName = realProduct.title;
+                            correctImg = realProduct.img;
+                        } else {
+                            correctPrice = parsePrice(originalItem.product_price);
+                        }
+
                         const safeProductId = isNaN(originalItem.product_id) ? originalItem.product_id : Number(originalItem.product_id);
 
                         const res = await fetch(`${BASE_URL}/api/cart`, { 
@@ -611,9 +624,10 @@
                             body: JSON.stringify({ 
                                 product_id: safeProductId, 
                                 quantity: Number(accumulatedDelta),
-                                product_name: String(originalItem.product_name || "Barang"),
-                                product_price: String(originalItem.product_price || "0"),
-                                product_img: String(originalItem.product_img || "")
+                                product_name: String(correctName),
+                                // PATCH TERPENTING: Jangan di-String()! Harus murni Number supaya Rust menerima.
+                                product_price: Number(correctPrice), 
+                                product_img: String(correctImg)
                             }) 
                         });
                         
@@ -832,12 +846,21 @@
             try {
                 const voucherCodes = activeVouchers.map(v => v.code);
                 
-                const payloadItems = cartItems.map(x => ({
-                    product_id: x.product_id, 
-                    quantity: Number(x.quantity),
-                    product_name: String(x.product_name || "Barang"),
-                    product_price: String(x.product_price || "0")
-                }));
+                const payloadItems = cartItems.map(x => {
+                    const realProduct = allProducts.find(p => String(p.id) === String(x.product_id));
+                    let correctPrice = 0;
+                    if (realProduct) {
+                        correctPrice = (realProduct.is_promo && realProduct.promo_price) ? realProduct.promo_price : realProduct.price;
+                    } else {
+                        correctPrice = parsePrice(x.product_price);
+                    }
+                    return {
+                        product_id: x.product_id, 
+                        quantity: Number(x.quantity),
+                        product_name: String(realProduct ? realProduct.title : (x.product_name || "Barang")),
+                        product_price: Number(correctPrice) // 🛡️ Kunci Aman: Paksa ke Number
+                    };
+                });
 
                 const res = await fetch(`${BASE_URL}/api/checkout`, { 
                     method: 'POST', 

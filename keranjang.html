@@ -347,14 +347,14 @@
         }
 
         const isLocalhost = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
-        const BASE_URL = isLocalhost ? 'http://127.0.0.1:10000' : '';
+        const BASE_URL = isLocalhost ? 'http://127.0.0.1:10000' : 'https://rust-vjn7.onrender.com';
 
         // --- SISTEM SESI LOKAL ---
         const sessionData = localStorage.getItem('user_session');
         if (!sessionData) { window.location.replace('login.html'); }
         const session = JSON.parse(sessionData);
 
-        let allProducts = []; // <-- TAMBAHAN BARU: Untuk menyimpan referensi harga asli
+        let allProducts = []; 
         let cartItems = [];
         let rawSubtotal = 0; 
         let finalTotalRp = 0; 
@@ -362,7 +362,9 @@
         let activeVouchers = []; 
         let globalAddress = "";
         let globalPhone = "";
-        let itemToDelete = null;
+        
+        // 🛡️ PERBAIKAN: Variabel ini sekarang akan menampung tipe data ASLI dari Rust
+        let itemToDeleteOriginalType = null;
 
         function showNotification(title, message, type, redirectUrl = null) {
             const notifModal = document.getElementById('notificationModal');
@@ -464,14 +466,11 @@
             return parseInt(String(priceString).replace(/[^0-9]/g, '')) || 0; 
         }
 
-        // =========================================================================
-        // FUNGSI UTAMA: MENGAMBIL DATA PRODUK SEBELUM RENDER KERANJANG
-        // =========================================================================
         async function fetchProductsCatalog() {
             try {
                 const res = await fetch(`${BASE_URL}/api/products`);
                 if (res.ok) allProducts = await res.json();
-            } catch(e) { console.error("Gagal menarik katalog untuk referensi harga"); }
+            } catch(e) { console.error("Gagal menarik katalog"); }
         }
 
         function renderCartItems() {
@@ -490,28 +489,22 @@
             let total = 0;
 
             cartItems.forEach(item => {
-                // 🛡️ SOLUSI ENTERPRISE: Mencari harga ASLI dari katalog produk
                 const realProduct = allProducts.find(p => String(p.id) === String(item.product_id));
                 
                 let displayPrice = item.product_price || "0";
                 let displayName = item.product_name || "Data Lama/Rusak";
                 let displayImg = item.product_img || 'https://placehold.co/70x70/e0e5ec/a3b1c6?text=Barang';
 
-                // Jika barang ditemukan di database utama, TIMPA harganya agar selalu 100% akurat!
                 if (realProduct) {
                     displayName = realProduct.title;
                     displayImg = realProduct.img;
                     displayPrice = (realProduct.is_promo && realProduct.promo_price) ? realProduct.promo_price : realProduct.price;
-                    
-                    // Simpan kembali ke memory agar saat dikirim ke checkout, datanya sempurna
-                    item.product_name = displayName;
-                    item.product_price = displayPrice;
                 }
 
                 const rawPrice = parsePrice(displayPrice);
                 total += (rawPrice * item.quantity);
                 
-                const safePriceHTML = rawPrice > 0 ? formatRupiah(rawPrice) : "<span style='color:#ff4757; font-size:12px;'>Katalog Tidak Ditemukan</span>";
+                const safePriceHTML = rawPrice > 0 ? formatRupiah(rawPrice) : "<span style='color:#ff4757; font-size:12px;'>Harga Error</span>";
 
                 const card = document.createElement('div');
                 card.className = 'cart-card';
@@ -566,56 +559,68 @@
             }
         }
 
-        async function changeQty(id, delta) {
-            const i = cartItems.find(x => String(x.id) === String(id));
-            if(!i) return;
-            const newQty = i.quantity + delta;
+        async function changeQty(htmlId, delta) {
+            // Temukan barang asli untuk menggunakan product_id aslinya
+            const originalItem = cartItems.find(x => String(x.id) === String(htmlId));
+            if(!originalItem) return;
             
-            if(newQty < 1) return confirmDelete(id);
+            const newQty = originalItem.quantity + delta;
+            if(newQty < 1) return confirmDelete(htmlId);
             
-            i.quantity = newQty;
+            originalItem.quantity = newQty;
             renderCartItems(); 
             
             try {
-                const safeProductId = isNaN(i.product_id) ? i.product_id : Number(i.product_id);
+                // 🛡️ PERBAIKAN: Gunakan product_id dengan tipe ASLINYA dari database
                 await fetch(`${BASE_URL}/api/cart`, { 
                     method: 'POST', 
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
-                    body: JSON.stringify({ product_id: safeProductId, quantity: delta }) 
+                    body: JSON.stringify({ product_id: originalItem.product_id, quantity: delta }) 
                 });
             } catch (e) { }
         }
 
-        function confirmDelete(id) { 
-            itemToDelete = id; 
+        function confirmDelete(htmlId) { 
+            // 🛡️ PERBAIKAN: Cari barang di cartItems, lalu simpan ID ASLINYA (tanpa diubah jadi teks/angka sembarangan)
+            const originalItem = cartItems.find(x => String(x.id) === String(htmlId));
+            itemToDeleteOriginalType = originalItem ? originalItem.id : htmlId; 
+            
             document.getElementById('confirmDeleteModal').classList.add('active'); 
         }
+
         function closeDeleteModal() { 
-            itemToDelete = null; 
+            itemToDeleteOriginalType = null; 
             document.getElementById('confirmDeleteModal').classList.remove('active'); 
         }
         
         async function executeDelete() {
-            if(!itemToDelete) return;
-            const idTarget = String(itemToDelete); // Simpan ID dalam format String untuk frontend
+            if(!itemToDeleteOriginalType) return;
+            
+            const targetId = itemToDeleteOriginalType; // Menyimpan tipe data aslinya!
             closeDeleteModal();
+            
             try {
-                // 🛡️ SOLUSI HAPUS: Cek otomatis apakah ID berupa Angka atau UUID, agar Rust puas
-                const safeIdPayload = isNaN(itemToDelete) ? itemToDelete : Number(itemToDelete);
-                
+                // 🛡️ PERBAIKAN: Kirim ID kembali ke Rust sama persis seperti saat Rust memberikannya
                 const res = await fetch(`${BASE_URL}/api/cart`, { 
                     method: 'DELETE', 
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
-                    body: JSON.stringify({ id: safeIdPayload }) 
+                    body: JSON.stringify({ id: targetId }) 
                 });
                 
-                if (!res.ok) throw new Error();
+                if (!res.ok) {
+                    let errMsg = "Ditolak Server";
+                    try {
+                        const errData = await res.json();
+                        errMsg = errData.error || errData.message || errMsg;
+                    } catch(e) {}
+                    throw new Error(errMsg);
+                }
                 
                 // Berhasil! Hapus dari layar.
-                cartItems = cartItems.filter(x => String(x.id) !== idTarget);
+                cartItems = cartItems.filter(x => String(x.id) !== String(targetId));
                 renderCartItems();
             } catch (e) { 
-                showNotification("Gagal", "Gagal menghapus barang.", "error"); 
+                showNotification("Gagal", `Tidak dapat menghapus: ${e.message}`, "error"); 
             }
         }
 
@@ -777,11 +782,13 @@
             
             try {
                 const voucherCodes = activeVouchers.map(v => v.code);
+                
+                // 🛡️ PERBAIKAN: Gunakan tipe asli untuk checkout juga
                 const payloadItems = cartItems.map(x => ({
-                    product_id: isNaN(x.product_id) ? x.product_id : Number(x.product_id),
+                    product_id: x.product_id, // Tipe asli
                     quantity: Number(x.quantity),
-                    product_name: String(x.product_name),
-                    product_price: String(x.product_price)
+                    product_name: String(x.product_name || "Barang"),
+                    product_price: String(x.product_price || "0")
                 }));
 
                 const res = await fetch(`${BASE_URL}/api/checkout`, { 
@@ -816,7 +823,6 @@
             document.getElementById('switchIcon').classList.replace(isDark ? 'fa-moon' : 'fa-sun', isDark ? 'fa-sun' : 'fa-moon');
         });
 
-        // 🚀 INI KUNCI UTAMANYA: Mengunduh katalog produk terlebih dahulu sebelum memuat keranjang
         window.addEventListener('DOMContentLoaded', async () => { 
             updateNavUI(); 
             await fetchProductsCatalog(); 

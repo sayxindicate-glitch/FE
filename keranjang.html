@@ -340,14 +340,15 @@
         }
 
         function safeURL(url) {
-            if (!url) return 'https://placehold.co/50x50/e0e5ec/a3b1c6?text=Barang';
+            if (!url) return 'https://placehold.co/70x70/e0e5ec/a3b1c6?text=Barang';
             const strUrl = String(url).trim();
             if (strUrl.startsWith('http') || strUrl.startsWith('/')) return escapeHTML(strUrl);
             return '#'; 
         }
 
+        // PENGATURAN API URL CERDAS (REVERSE PROXY VERCEL)
         const isLocalhost = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
-        const BASE_URL = isLocalhost ? 'http://127.0.0.1:10000' : 'https://rust-vjn7.onrender.com';
+        const BASE_URL = isLocalhost ? 'http://127.0.0.1:10000' : '';
 
         // --- SISTEM SESI LOKAL ---
         const sessionData = localStorage.getItem('user_session');
@@ -363,8 +364,13 @@
         let globalAddress = "";
         let globalPhone = "";
         
-        // 🛡️ PERBAIKAN: Variabel ini sekarang akan menampung tipe data ASLI dari Rust
+        // Variabel untuk mempertahankan Tipe Data Asli (String/UUID atau Integer) dari Rust
         let itemToDeleteOriginalType = null;
+        
+        // Variabel untuk fitur Anti-Spam (Optimistic UI & Debouncing)
+        let pendingDeltas = {};
+        let syncTimeout = {};
+        let isSyncing = 0;
 
         function showNotification(title, message, type, redirectUrl = null) {
             const notifModal = document.getElementById('notificationModal');
@@ -466,6 +472,7 @@
             return parseInt(String(priceString).replace(/[^0-9]/g, '')) || 0; 
         }
 
+        // MENGAMBIL KATALOG PRODUK UNTUK SINKRONISASI HARGA
         async function fetchProductsCatalog() {
             try {
                 const res = await fetch(`${BASE_URL}/api/products`);
@@ -479,7 +486,13 @@
                 container.innerHTML = `<div class="empty-cart"><i class="fas fa-box-open fa-3x"></i><br><br>Keranjang kosong.<br><a href="index.html" style="color:var(--accent-color); text-decoration:none;">Belanja Sekarang</a></div>`;
                 document.getElementById('totalPriceDisplay').innerText = "Rp 0";
                 document.getElementById('strikePriceDisplay').style.display = 'none';
-                document.getElementById('checkoutBtn').disabled = true;
+                
+                const btnCheckout = document.getElementById('checkoutBtn');
+                if(btnCheckout) {
+                    btnCheckout.disabled = true;
+                    btnCheckout.innerHTML = 'Buat Pesanan';
+                }
+                
                 document.getElementById('mobileCartBadge').style.display = 'none';
                 document.getElementById('cartBadge').style.display = 'none';
                 return;
@@ -489,6 +502,7 @@
             let total = 0;
 
             cartItems.forEach(item => {
+                // SINKRONISASI HARGA DARI DATABASE KATALOG UTAMA
                 const realProduct = allProducts.find(p => String(p.id) === String(item.product_id));
                 
                 let displayPrice = item.product_price || "0";
@@ -535,7 +549,11 @@
                 document.getElementById('totalPriceDisplay').innerText = formatRupiah(finalTotalRp); 
             }
             
-            document.getElementById('checkoutBtn').disabled = (finalTotalRp === 0 && cartItems.length > 0);
+            const btnCheckout = document.getElementById('checkoutBtn');
+            if(btnCheckout && isSyncing === 0) {
+                btnCheckout.disabled = (finalTotalRp === 0 && cartItems.length > 0);
+                btnCheckout.innerHTML = 'Buat Pesanan';
+            }
             
             const totalQty = cartItems.reduce((s, i) => s + i.quantity, 0);
             const badgeText = totalQty > 99 ? '99+' : totalQty;
@@ -559,29 +577,61 @@
             }
         }
 
+        // FUNGSI GANTI JUMLAH DENGAN ANTI-SPAM (OPTIMISTIC UI + DEBOUNCE)
         async function changeQty(htmlId, delta) {
-            // Temukan barang asli untuk menggunakan product_id aslinya
             const originalItem = cartItems.find(x => String(x.id) === String(htmlId));
             if(!originalItem) return;
-            
+
             const newQty = originalItem.quantity + delta;
             if(newQty < 1) return confirmDelete(htmlId);
-            
+
+            // 1. UPDATE LAYAR INSTAN (Optimistic UI)
             originalItem.quantity = newQty;
             renderCartItems(); 
+
+            // 2. KUNCI CHECKOUT SEMENTARA
+            const checkoutBtn = document.getElementById('checkoutBtn');
+            isSyncing++;
+            if (checkoutBtn) {
+                checkoutBtn.disabled = true;
+                checkoutBtn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Menyinkronkan...';
+            }
             
-            try {
-                // 🛡️ PERBAIKAN: Gunakan product_id dengan tipe ASLINYA dari database
-                await fetch(`${BASE_URL}/api/cart`, { 
-                    method: 'POST', 
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
-                    body: JSON.stringify({ product_id: originalItem.product_id, quantity: delta }) 
-                });
-            } catch (e) { }
+            // 3. AKUMULASI KLIK
+            if (!pendingDeltas[htmlId]) pendingDeltas[htmlId] = 0;
+            pendingDeltas[htmlId] += delta;
+
+            // 4. RESET TIMER (Debouncing)
+            if (syncTimeout[htmlId]) clearTimeout(syncTimeout[htmlId]);
+
+            // 5. TEMBAK SERVER SETELAH 0.5 DETIK USER BERHENTI KLIK
+            syncTimeout[htmlId] = setTimeout(async () => {
+                const accumulatedDelta = pendingDeltas[htmlId];
+                pendingDeltas[htmlId] = 0; 
+
+                if (accumulatedDelta !== 0) {
+                    try {
+                        await fetch(`${BASE_URL}/api/cart`, { 
+                            method: 'POST', 
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
+                            body: JSON.stringify({ product_id: originalItem.product_id, quantity: accumulatedDelta }) 
+                        });
+                    } catch (e) {
+                        console.error("Gagal menyinkronkan data ke server");
+                    }
+                }
+
+                isSyncing--;
+                // BUKA KUNCI CHECKOUT
+                if (isSyncing === 0 && checkoutBtn) {
+                    checkoutBtn.disabled = (finalTotalRp === 0 && cartItems.length > 0);
+                    checkoutBtn.innerHTML = 'Buat Pesanan';
+                }
+            }, 500); 
         }
 
         function confirmDelete(htmlId) { 
-            // 🛡️ PERBAIKAN: Cari barang di cartItems, lalu simpan ID ASLINYA (tanpa diubah jadi teks/angka sembarangan)
+            // TANGKAP TIPE DATA ASLI SEBELUM DIHAPUS (Bisa Int atau String/UUID)
             const originalItem = cartItems.find(x => String(x.id) === String(htmlId));
             itemToDeleteOriginalType = originalItem ? originalItem.id : htmlId; 
             
@@ -596,11 +646,10 @@
         async function executeDelete() {
             if(!itemToDeleteOriginalType) return;
             
-            const targetId = itemToDeleteOriginalType; // Menyimpan tipe data aslinya!
+            const targetId = itemToDeleteOriginalType; // Gunakan tipe aslinya!
             closeDeleteModal();
             
             try {
-                // 🛡️ PERBAIKAN: Kirim ID kembali ke Rust sama persis seperti saat Rust memberikannya
                 const res = await fetch(`${BASE_URL}/api/cart`, { 
                     method: 'DELETE', 
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
@@ -616,7 +665,6 @@
                     throw new Error(errMsg);
                 }
                 
-                // Berhasil! Hapus dari layar.
                 cartItems = cartItems.filter(x => String(x.id) !== String(targetId));
                 renderCartItems();
             } catch (e) { 
@@ -783,9 +831,8 @@
             try {
                 const voucherCodes = activeVouchers.map(v => v.code);
                 
-                // 🛡️ PERBAIKAN: Gunakan tipe asli untuk checkout juga
                 const payloadItems = cartItems.map(x => ({
-                    product_id: x.product_id, // Tipe asli
+                    product_id: x.product_id, // Tetap menggunakan tipe aslinya
                     quantity: Number(x.quantity),
                     product_name: String(x.product_name || "Barang"),
                     product_price: String(x.product_price || "0")
@@ -825,7 +872,9 @@
 
         window.addEventListener('DOMContentLoaded', async () => { 
             updateNavUI(); 
+            // 1. Ambil Katalog dulu agar harganya dijamin sinkron!
             await fetchProductsCatalog(); 
+            // 2. Baru load isi keranjangnya
             loadCart(); 
         });
     </script>

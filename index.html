@@ -967,9 +967,26 @@
                 return;
             }
             
+            // 🛡️ SECURITY PATCH: ANTI-SPAM (Mencegah klik beruntun / Race Condition)
+            let btn;
+            let originalHtml = '';
+            if (event && event.currentTarget && (event.currentTarget.tagName === 'BUTTON' || event.currentTarget.classList.contains('neu-btn'))) {
+                btn = event.currentTarget;
+                if (btn.disabled) return; // Hentikan jika sedang memproses data
+                btn.disabled = true;
+                originalHtml = btn.innerHTML;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+            }
+
             const session = JSON.parse(sessionData);
-            const prod = allProducts.find(p => p.id == productId);
-            if (!prod) return;
+            
+            // 🛡️ PATCH: Memastikan pencarian produk 100% akurat walau tipe datanya berbeda
+            const prod = allProducts.find(p => String(p.id) === String(productId));
+            
+            if (!prod) {
+                if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
+                return;
+            }
 
             const qtyInput = document.getElementById(qtyInputId);
             const quantity = parseInt(qtyInput.value) || 1;
@@ -980,19 +997,15 @@
                 flyToCart(startX, startY);
             }
 
-            const currentBadge = document.getElementById('cartBadge').innerText;
-            let currentTotal = parseInt(currentBadge) || 0;
-            if (currentBadge === '99+') currentTotal = 99; 
-            
-            updateCartBadgeDirectly(currentTotal + quantity, true);
-
             const productModal = document.getElementById('productModal');
             if(productModal.classList.contains('active')) {
                 closeModal();
             }
 
             try {
-                // MENGGUNAKAN BASE_URL CERDAS AGAR TIDAK ERROR "KONEKSI INTERNET"
+                // 🛡️ PATCH: Paksa ID Produk menjadi Angka (Number) agar relasi harga di Database tidak rusak (0.0)
+                const cleanProductId = isNaN(prod.id) ? prod.id : Number(prod.id);
+
                 const response = await fetch(`${BASE_URL}/api/cart`, {
                     method: 'POST',
                     headers: { 
@@ -1000,7 +1013,7 @@
                         'Authorization': `Bearer ${session.access_token}`
                     },
                     body: JSON.stringify({
-                        product_id: prod.id,
+                        product_id: cleanProductId,
                         quantity: quantity
                     })
                 });
@@ -1009,6 +1022,13 @@
                     const err = await response.json();
                     throw new Error(err.error || err.message || "Gagal terhubung ke Database");
                 }
+
+                // 🛡️ PATCH: Hanya tambahkan angka di ikon keranjang JIKA database sukses menyimpan
+                const currentBadge = document.getElementById('cartBadge').innerText;
+                let currentTotal = parseInt(currentBadge) || 0;
+                if (currentBadge === '99+') currentTotal = 99; 
+                updateCartBadgeDirectly(currentTotal + quantity, true);
+
             } catch (error) {
                 syncBadges(session.access_token); 
 
@@ -1017,8 +1037,13 @@
                     showNotification("Sesi Berakhir", "Tiket login Anda telah kedaluwarsa. Silakan login kembali.", "warning", "login.html");
                     updateNavUI();
                 } else {
-                    // ERROR INI SEBELUMNYA MUNCUL KARENA CORS / SALAH URL
-                    showNotification("Gagal Memasukkan Barang", "Mohon periksa koneksi internet Anda.", "error");
+                    showNotification("Gagal Memasukkan Barang", "Pesan: " + error.message, "error");
+                }
+            } finally {
+                // Kembalikan tombol "Beli" ke keadaan semula setelah proses selesai
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
                 }
             }
         }

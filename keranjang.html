@@ -366,9 +366,10 @@
         
         let itemToDeleteOriginalType = null;
         
+        // Variabel untuk Anti-Spam dan penguncian tombol
         let pendingDeltas = {};
         let syncTimeout = {};
-        let isSyncing = 0;
+        let activeNetworkRequests = 0;
 
         function showNotification(title, message, type, redirectUrl = null) {
             const notifModal = document.getElementById('notificationModal');
@@ -546,7 +547,7 @@
             }
             
             const btnCheckout = document.getElementById('checkoutBtn');
-            if(btnCheckout && isSyncing === 0) {
+            if(btnCheckout && Object.keys(syncTimeout).length === 0 && activeNetworkRequests === 0) {
                 btnCheckout.disabled = (finalTotalRp === 0 && cartItems.length > 0);
                 btnCheckout.innerHTML = 'Buat Pesanan';
             }
@@ -573,7 +574,17 @@
             }
         }
 
-        // 🛡️ SOLUSI TIPE DATA: Mengirim data dengan Angka (Number) Murni
+        // FUNGSI KHUSUS: Mengambil ulang keranjang diam-diam agar ID terbaru didapatkan (tanpa layar berkedip)
+        async function loadCartSilently() {
+            try {
+                const res = await fetch(`${BASE_URL}/api/cart`, { headers: { 'Authorization': `Bearer ${session.access_token}` } });
+                if (res.ok) {
+                    cartItems = await res.json();
+                }
+            } catch (error) {}
+        }
+
+        // 🛡️ SOLUSI RUST U32 BYPASS: Jurus "Hapus & Ganti" jika nilai negatif!
         async function changeQty(htmlId, delta) {
             const originalItem = cartItems.find(x => String(x.id) === String(htmlId));
             if(!originalItem) return;
@@ -585,7 +596,6 @@
             renderCartItems(); 
 
             const checkoutBtn = document.getElementById('checkoutBtn');
-            isSyncing++;
             if (checkoutBtn) {
                 checkoutBtn.disabled = true;
                 checkoutBtn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Menyinkronkan...';
@@ -599,53 +609,74 @@
             syncTimeout[htmlId] = setTimeout(async () => {
                 const accumulatedDelta = pendingDeltas[htmlId];
                 pendingDeltas[htmlId] = 0; 
+                delete syncTimeout[htmlId];
 
                 if (accumulatedDelta !== 0) {
+                    activeNetworkRequests++;
                     try {
-                        // KUNCI PERBAIKAN: Tarik data asli dari Katalog
                         const realProduct = allProducts.find(p => String(p.id) === String(originalItem.product_id));
-                        let correctPrice = 0;
-                        let correctName = originalItem.product_name || "Barang";
-                        let correctImg = originalItem.product_img || "";
-
-                        if (realProduct) {
-                            correctPrice = (realProduct.is_promo && realProduct.promo_price) ? realProduct.promo_price : realProduct.price;
-                            correctName = realProduct.title;
-                            correctImg = realProduct.img;
-                        } else {
-                            correctPrice = parsePrice(originalItem.product_price);
-                        }
-
+                        let correctPrice = realProduct ? ((realProduct.is_promo && realProduct.promo_price) ? realProduct.promo_price : realProduct.price) : parsePrice(originalItem.product_price);
+                        let correctName = realProduct ? realProduct.title : (originalItem.product_name || "Barang");
+                        let correctImg = realProduct ? realProduct.img : (originalItem.product_img || "");
                         const safeProductId = isNaN(originalItem.product_id) ? originalItem.product_id : Number(originalItem.product_id);
 
-                        const res = await fetch(`${BASE_URL}/api/cart`, { 
-                            method: 'POST', 
-                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
-                            body: JSON.stringify({ 
-                                product_id: safeProductId, 
-                                quantity: Number(accumulatedDelta),
-                                product_name: String(correctName),
-                                // PATCH TERPENTING: Jangan di-String()! Harus murni Number supaya Rust menerima.
-                                product_price: Number(correctPrice), 
-                                product_img: String(correctImg)
-                            }) 
-                        });
-                        
-                        if (!res.ok) {
-                            console.error("Server menolak request:", await res.text());
-                            throw new Error("Ditolak Server");
+                        if (accumulatedDelta > 0) {
+                            // JIKA DITAMBAH: Rust mengizinkan penambahan (angka positif)
+                            const res = await fetch(`${BASE_URL}/api/cart`, { 
+                                method: 'POST', 
+                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
+                                body: JSON.stringify({ 
+                                    product_id: safeProductId, 
+                                    quantity: Number(accumulatedDelta),
+                                    product_name: String(correctName),
+                                    product_price: Number(correctPrice), 
+                                    product_img: String(correctImg)
+                                }) 
+                            });
+                            if (!res.ok) throw new Error("Ditolak Server");
+                        } else {
+                            // JIKA DIKURANG: Jurus Rahasia! Hapus sepenuhnya, lalu masukkan nilai absolut baru.
+                            const delRes = await fetch(`${BASE_URL}/api/cart`, {
+                                method: 'DELETE',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+                                body: JSON.stringify({ id: originalItem.id })
+                            });
+                            if (!delRes.ok) throw new Error("Gagal menghapus cache");
+
+                            const postRes = await fetch(`${BASE_URL}/api/cart`, { 
+                                method: 'POST', 
+                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
+                                body: JSON.stringify({ 
+                                    product_id: safeProductId, 
+                                    // Kita masukkan total quantity baru (contoh: jadi 3), ini BUKAN angka negatif!
+                                    quantity: Number(originalItem.quantity), 
+                                    product_name: String(correctName),
+                                    product_price: Number(correctPrice), 
+                                    product_img: String(correctImg)
+                                }) 
+                            });
+                            if (!postRes.ok) throw new Error("Gagal menyuntikkan data baru");
+                            
+                            // Tarik ID terbaru dari server agar klik minus selanjutnya tidak error
+                            await loadCartSilently();
                         }
                     } catch (e) {
-                        console.error("Gagal menyinkronkan data ke server");
+                        console.error("Gagal menyinkronkan data", e);
+                        showNotification("Kesalahan Sinkronisasi", "Gagal memperbarui jumlah. Halaman akan dimuat ulang.", "error");
+                        setTimeout(() => window.location.reload(), 1500);
                     }
+                    activeNetworkRequests--;
                 }
 
-                isSyncing--;
-                if (isSyncing === 0 && checkoutBtn) {
-                    checkoutBtn.disabled = (finalTotalRp === 0 && cartItems.length > 0);
-                    checkoutBtn.innerHTML = 'Buat Pesanan';
+                // Kembalikan tombol jika semua proses selesai
+                if (Object.keys(syncTimeout).length === 0 && activeNetworkRequests === 0) {
+                    const checkoutBtn = document.getElementById('checkoutBtn');
+                    if (checkoutBtn) {
+                        checkoutBtn.disabled = (finalTotalRp === 0 && cartItems.length > 0);
+                        checkoutBtn.innerHTML = 'Buat Pesanan';
+                    }
                 }
-            }, 500); 
+            }, 600); 
         }
 
         function confirmDelete(htmlId) { 
@@ -858,7 +889,7 @@
                         product_id: x.product_id, 
                         quantity: Number(x.quantity),
                         product_name: String(realProduct ? realProduct.title : (x.product_name || "Barang")),
-                        product_price: Number(correctPrice) // 🛡️ Kunci Aman: Paksa ke Number
+                        product_price: Number(correctPrice) 
                     };
                 });
 

@@ -328,15 +328,12 @@
         // =========================================================================
         // SECURITY PATCH: KUNCI LINGKUNGAN JAVASCRIPT & SANITASI
         // =========================================================================
-        // MENCEGAH PROTOTYPE POLLUTION (Ancaman 2)
         Object.freeze(Object.prototype);
 
-        // MENCEGAH CLICKJACKING / UI REDRESSING FALLBACK (Ancaman 8)
         if (window.top !== window.self) {
             window.top.location = window.self.location;
         }
 
-        // FUNGSI SANITASI MUTLAK (Anti-XSS & DOM Clobbering)
         function escapeHTML(str) {
             if (!str) return '';
             return String(str).replace(/[&<>'"]/g, 
@@ -350,7 +347,6 @@
             );
         }
 
-        // FUNGSI VALIDASI URL (Anti javascript: URI Bypass - Ancaman 1 & 3)
         function safeURL(url) {
             if (!url) return 'https://placehold.co/50x50/e0e5ec/a3b1c6?text=GG';
             const strUrl = String(url).trim();
@@ -361,7 +357,9 @@
         }
         // =========================================================================
 
-        // PENGATURAN API URL CERDAS (INILAH YANG MEMPERBAIKI MASALAH MUTER TERUS)
+        // =========================================================================
+        // PENGATURAN API URL CERDAS (Sudah diset ke Render aslimu)
+        // =========================================================================
         const isLocalhost = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
         const BASE_URL = isLocalhost ? 'http://127.0.0.1:10000' : '';
 
@@ -419,7 +417,6 @@
             const mobileAccountBtn = document.getElementById('mobileAccountBtn');
 
             try {
-                // PATCH BASE_URL
                 const userRes = await fetch(`${BASE_URL}/api/user`, { headers: { 'Authorization': `Bearer ${session.access_token}` } });
                 
                 if (userRes.status === 401 || userRes.status === 403) {
@@ -448,9 +445,7 @@
                         mobileAccountBtn.innerHTML = `<img src="${avatarUrl}" alt="Avatar" style="width: 24px; height: 24px; border-radius: 50%; object-fit: cover; margin-bottom: 2px;"><span>${displayName}</span>`;
                     }
                 }
-                
                 syncBadges(session.access_token);
-
             } catch (e) { 
                 console.log("Koneksi offline, fallback ke profil lokal"); 
             }
@@ -459,7 +454,6 @@
         // --- SINKRONISASI BADGE ---
         async function syncBadges(token) {
             try {
-                // PATCH BASE_URL
                 const promoRes = await fetch(`${BASE_URL}/api/vouchers`, { headers: { 'Authorization': `Bearer ${token}` } });
                 if (promoRes.ok) {
                     const promos = await promoRes.json();
@@ -473,7 +467,6 @@
             } catch (e) {}
 
             try {
-                // PATCH BASE_URL
                 const orderRes = await fetch(`${BASE_URL}/api/orders`, { headers: { 'Authorization': `Bearer ${token}` } });
                 if (orderRes.ok) {
                     const orders = await orderRes.json();
@@ -494,9 +487,11 @@
         }
 
         function formatRupiah(number) { return "Rp " + number.toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
+        
         function parsePrice(priceString) { 
+            if(!priceString) return 0;
             if(typeof priceString === 'number') return priceString;
-            return parseInt(priceString.replace(/[^0-9]/g, '')) || 0; 
+            return parseInt(String(priceString).replace(/[^0-9]/g, '')) || 0; 
         }
 
         function renderCartItems() {
@@ -515,18 +510,22 @@
             container.innerHTML = '';
             let total = 0;
             cartItems.forEach(item => {
-                total += (parsePrice(item.product_price) * item.quantity);
+                const rawPrice = parsePrice(item.product_price);
+                total += (rawPrice * item.quantity);
                 
-                const imgUrl = (item.product_img && item.product_img !== "undefined" && item.product_img.startsWith('http')) 
+                const imgUrl = (item.product_img && item.product_img !== "undefined" && String(item.product_img).startsWith('http')) 
                                 ? item.product_img : 'https://placehold.co/70x70/e0e5ec/a3b1c6?text=Barang';
+
+                const safeName = (item.product_name && item.product_name !== "undefined") ? item.product_name : "Data Rusak (Harap Hapus Barang Ini)";
+                const safePriceHTML = rawPrice > 0 ? formatRupiah(rawPrice) : "<span style='color:#ff4757; font-size:12px;'>Harga Error</span>";
 
                 const card = document.createElement('div');
                 card.className = 'cart-card';
                 card.innerHTML = `
-                    <img src="${imgUrl}" class="cart-img" alt="Produk">
+                    <img src="${safeURL(imgUrl)}" class="cart-img" alt="Produk">
                     <div class="cart-details">
-                        <div class="cart-title">${item.product_name}</div>
-                        <div class="cart-price">${item.product_price}</div>
+                        <div class="cart-title">${escapeHTML(safeName)}</div>
+                        <div class="cart-price">${safePriceHTML}</div>
                         <div class="cart-actions-inline">
                             <div class="qty-control">
                                 <button class="qty-btn" onclick="changeQty('${item.id}', -1)"><i class="fas fa-minus"></i></button>
@@ -549,7 +548,8 @@
                 document.getElementById('totalPriceDisplay').innerText = formatRupiah(finalTotalRp); 
             }
             
-            document.getElementById('checkoutBtn').disabled = false;
+            // Nonaktifkan tombol checkout jika keranjang berisi data rusak (harga 0)
+            document.getElementById('checkoutBtn').disabled = (finalTotalRp === 0 && cartItems.length > 0);
             
             const totalQty = cartItems.reduce((s, i) => s + i.quantity, 0);
             document.getElementById('mobileCartBadge').style.display = totalQty > 0 ? 'flex' : 'none';
@@ -560,7 +560,6 @@
 
         async function loadCart() {
             try {
-                // PATCH BASE_URL
                 const res = await fetch(`${BASE_URL}/api/cart`, { headers: { 'Authorization': `Bearer ${session.access_token}` } });
                 if (!res.ok) {
                     if (res.status === 401 || res.status === 403) throw new Error("Sesi");
@@ -578,7 +577,7 @@
         }
 
         async function changeQty(id, delta) {
-            const i = cartItems.find(x => x.id === id);
+            const i = cartItems.find(x => String(x.id) === String(id));
             if(!i) return;
             const newQty = i.quantity + delta;
             
@@ -590,11 +589,10 @@
             renderCartItems(); 
             
             try {
-                // PATCH BASE_URL
                 await fetch(`${BASE_URL}/api/cart`, { 
                     method: 'POST', 
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
-                    body: JSON.stringify({ product_id: i.product_id, quantity: delta }) 
+                    body: JSON.stringify({ product_id: Number(i.product_id), quantity: delta }) 
                 });
             } catch (e) {
                 console.error("Gagal sinkron qty server");
@@ -616,16 +614,15 @@
             const id = itemToDelete;
             closeDeleteModal();
             try {
-                // PATCH BASE_URL
                 const res = await fetch(`${BASE_URL}/api/cart`, { 
                     method: 'DELETE', 
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
-                    body: JSON.stringify({ id }) 
+                    body: JSON.stringify({ id: Number(id) }) 
                 });
                 
                 if (!res.ok) throw new Error();
                 
-                cartItems = cartItems.filter(x => x.id !== id);
+                cartItems = cartItems.filter(x => String(x.id) !== String(id));
                 renderCartItems();
             } catch (e) { 
                 showNotification("Gagal", "Gagal menghapus barang", "error"); 
@@ -671,7 +668,6 @@
             container.innerHTML = '<div style="text-align:center; font-size:12px; color:var(--text-muted);"><i class="fas fa-spinner fa-spin"></i> Mencari promo...</div>';
             
             try {
-                // PATCH BASE_URL
                 const res = await fetch(`${BASE_URL}/api/vouchers`, { headers: { 'Authorization': `Bearer ${session.access_token}` } });
                 
                 if (!res.ok) throw new Error('API Gagal merespon');
@@ -689,10 +685,10 @@
                     container.innerHTML += `
                         <div class="promo-pill">
                             <div class="promo-pill-info">
-                                <span class="promo-pill-code" style="color: ${v.color || 'var(--accent-color)'};">${v.code}</span>
-                                <div class="promo-pill-desc">${v.title}</div>
+                                <span class="promo-pill-code" style="color: ${v.color || 'var(--accent-color)'};">${escapeHTML(v.code)}</span>
+                                <div class="promo-pill-desc">${escapeHTML(v.title)}</div>
                             </div>
-                            <button class="promo-pill-btn" onclick="executePromo('${v.code}')" ${isUsed ? 'disabled style="opacity:0.5"' : ''}>${isUsed ? 'Terpakai' : 'Pakai'}</button>
+                            <button class="promo-pill-btn" onclick="executePromo('${escapeHTML(v.code)}')" ${isUsed ? 'disabled style="opacity:0.5"' : ''}>${isUsed ? 'Terpakai' : 'Pakai'}</button>
                         </div>`;
                 });
             } catch (error) {
@@ -735,7 +731,6 @@
             btnManual.disabled = true;
 
             try {
-                // PATCH BASE_URL
                 const res = await fetch(`${BASE_URL}/api/apply-voucher`, { 
                     method: 'POST', 
                     headers: { 
@@ -781,7 +776,6 @@
         async function syncPromosAndApply() {
             for (let i = 0; i < activeVouchers.length; i++) {
                 try {
-                    // PATCH BASE_URL
                     const res = await fetch(`${BASE_URL}/api/apply-voucher`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
@@ -851,7 +845,6 @@
             try {
                 const voucherCodes = activeVouchers.map(v => v.code);
                 
-                // PATCH BASE_URL
                 const res = await fetch(`${BASE_URL}/api/checkout`, { 
                     method: 'POST', 
                     headers: { 
@@ -862,7 +855,13 @@
                         shipping_address: globalAddress, 
                         phone_number: globalPhone, 
                         total_price: formatRupiah(finalTotalRp), 
-                        items: cartItems,
+                        // Memastikan format data items bersih sebelum dilempar ke Rust
+                        items: cartItems.map(x => ({
+                            product_id: Number(x.product_id),
+                            quantity: Number(x.quantity),
+                            product_name: String(x.product_name),
+                            product_price: String(x.product_price)
+                        })),
                         used_vouchers: voucherCodes
                     }) 
                 });

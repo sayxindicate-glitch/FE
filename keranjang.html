@@ -326,7 +326,7 @@
         "use strict";
 
         // =========================================================================
-        // SECURITY PATCH: KUNCI LINGKUNGAN JAVASCRIPT & SANITASI
+        // SECURITY PATCH: KUNCI LINGKUNGAN & URL API
         // =========================================================================
         Object.freeze(Object.prototype);
 
@@ -336,26 +336,15 @@
 
         function escapeHTML(str) {
             if (!str) return '';
-            return String(str).replace(/[&<>'"]/g, 
-                tag => ({
-                    '&': '&amp;',
-                    '<': '&lt;',
-                    '>': '&gt;',
-                    "'": '&#39;',
-                    '"': '&quot;'
-                }[tag] || tag)
-            );
+            return String(str).replace(/[&<>'"]/g, tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag));
         }
 
         function safeURL(url) {
-            if (!url) return 'https://placehold.co/50x50/e0e5ec/a3b1c6?text=GG';
+            if (!url) return 'https://placehold.co/50x50/e0e5ec/a3b1c6?text=Barang';
             const strUrl = String(url).trim();
-            if (strUrl.startsWith('http://') || strUrl.startsWith('https://') || strUrl.startsWith('/') || strUrl.startsWith('./') || strUrl.startsWith('../')) {
-                return escapeHTML(strUrl);
-            }
+            if (strUrl.startsWith('http') || strUrl.startsWith('/')) return escapeHTML(strUrl);
             return '#'; 
         }
-        // =========================================================================
 
         const isLocalhost = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
         const BASE_URL = isLocalhost ? 'http://127.0.0.1:10000' : 'https://rust-vjn7.onrender.com';
@@ -365,6 +354,7 @@
         if (!sessionData) { window.location.replace('login.html'); }
         const session = JSON.parse(sessionData);
 
+        let allProducts = []; // <-- TAMBAHAN BARU: Untuk menyimpan referensi harga asli
         let cartItems = [];
         let rawSubtotal = 0; 
         let finalTotalRp = 0; 
@@ -374,16 +364,12 @@
         let globalPhone = "";
         let itemToDelete = null;
 
-        // --- FUNGSI NOTIFIKASI ---
         function showNotification(title, message, type, redirectUrl = null) {
             const notifModal = document.getElementById('notificationModal');
             const notifIcon = document.getElementById('notifIcon');
             const notifTitle = document.getElementById('notifTitle');
             const notifMessage = document.getElementById('notifMessage');
             const notifBtn = document.getElementById('notifBtn');
-
-            const safeTitle = title ? title : 'Informasi';
-            const safeMessage = message ? message : '';
 
             if(type === 'success') {
                 notifIcon.innerHTML = '<i class="fas fa-check-circle" style="color: #27ae60;"></i>';
@@ -399,8 +385,8 @@
                 notifBtn.innerText = redirectUrl ? 'Login Sekarang' : 'Mengerti';
             }
 
-            notifTitle.innerText = safeTitle;
-            notifMessage.innerText = safeMessage;
+            notifTitle.innerText = title;
+            notifMessage.innerText = message;
             notifBtn.onclick = function() { 
                 notifModal.classList.remove('active'); 
                 if(redirectUrl) window.location.href = redirectUrl;
@@ -414,24 +400,20 @@
 
             try {
                 const userRes = await fetch(`${BASE_URL}/api/user`, { headers: { 'Authorization': `Bearer ${session.access_token}` } });
-                
                 if (userRes.status === 401 || userRes.status === 403) {
-                    handleLogout();
+                    localStorage.removeItem('user_session'); 
+                    showNotification("Sesi Berakhir", "Sesi Anda habis. Silakan login kembali.", "warning", "login.html");
                     return;
                 }
 
                 if (userRes.ok) {
                     const userData = await userRes.json();
-                    
                     const displayName = userData.nama_panggilan || (userData.nama_lengkap ? userData.nama_lengkap.split(' ')[0] : "User");
                     const avatarUrl = `https://api.dicebear.com/7.x/micah/svg?seed=${encodeURIComponent(displayName)}&backgroundColor=e0e5ec&baseColor=f9c9b6`;
 
                     globalAddress = userData.alamat_lengkap || "";
                     globalPhone = userData.no_wa || "";
-                    
-                    if(globalAddress && globalPhone) {
-                        document.getElementById('summaryAddressVal').innerText = "Sudah Sesuai";
-                    }
+                    if(globalAddress && globalPhone) document.getElementById('summaryAddressVal').innerText = "Sudah Sesuai";
 
                     loginBtn.className = 'nav-profile-badge hide-on-mobile';
                     loginBtn.href = 'akun.html';
@@ -442,9 +424,7 @@
                     }
                 }
                 syncBadges(session.access_token);
-            } catch (e) { 
-                console.log("Koneksi offline, fallback ke profil lokal"); 
-            }
+            } catch (e) { }
         }
 
         async function syncBadges(token) {
@@ -452,41 +432,46 @@
                 const promoRes = await fetch(`${BASE_URL}/api/vouchers`, { headers: { 'Authorization': `Bearer ${token}` } });
                 if (promoRes.ok) {
                     const promos = await promoRes.json();
-                    const pb = document.getElementById('promoBadge');
-                    const mpb = document.getElementById('mobilePromoBadge');
                     if (promos.length > 0) {
-                        pb.style.display = 'flex'; pb.innerText = promos.length;
-                        if (mpb) { mpb.style.display = 'flex'; mpb.innerText = promos.length; }
+                        document.getElementById('promoBadge').style.display = 'flex'; 
+                        document.getElementById('promoBadge').innerText = promos.length;
+                        if(document.getElementById('mobilePromoBadge')) {
+                            document.getElementById('mobilePromoBadge').style.display = 'flex';
+                            document.getElementById('mobilePromoBadge').innerText = promos.length;
+                        }
                     }
                 }
-            } catch (e) {}
-
-            try {
                 const orderRes = await fetch(`${BASE_URL}/api/orders`, { headers: { 'Authorization': `Bearer ${token}` } });
                 if (orderRes.ok) {
                     const orders = await orderRes.json();
                     const activeOrders = orders.filter(o => o.status !== 'Selesai' && o.status !== 'Dibatalkan');
-                    const ob = document.getElementById('orderBadge');
-                    const mob = document.getElementById('mobileOrderBadge');
                     if (activeOrders.length > 0) {
-                        ob.style.display = 'flex'; ob.innerText = activeOrders.length;
-                        if (mob) { mob.style.display = 'flex'; mob.innerText = activeOrders.length; }
+                        document.getElementById('orderBadge').style.display = 'flex'; 
+                        document.getElementById('orderBadge').innerText = activeOrders.length;
+                        if(document.getElementById('mobileOrderBadge')) {
+                            document.getElementById('mobileOrderBadge').style.display = 'flex';
+                            document.getElementById('mobileOrderBadge').innerText = activeOrders.length;
+                        }
                     }
                 }
             } catch (e) {}
         }
 
-        function handleLogout() {
-            localStorage.removeItem('user_session'); 
-            showNotification("Sesi Berakhir", "Tiket login Anda telah kedaluwarsa. Silakan login kembali.", "warning", "login.html");
-        }
-
         function formatRupiah(number) { return "Rp " + number.toString().replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
-        
         function parsePrice(priceString) { 
             if(!priceString) return 0;
             if(typeof priceString === 'number') return priceString;
             return parseInt(String(priceString).replace(/[^0-9]/g, '')) || 0; 
+        }
+
+        // =========================================================================
+        // FUNGSI UTAMA: MENGAMBIL DATA PRODUK SEBELUM RENDER KERANJANG
+        // =========================================================================
+        async function fetchProductsCatalog() {
+            try {
+                const res = await fetch(`${BASE_URL}/api/products`);
+                if (res.ok) allProducts = await res.json();
+            } catch(e) { console.error("Gagal menarik katalog untuk referensi harga"); }
         }
 
         function renderCartItems() {
@@ -496,7 +481,6 @@
                 document.getElementById('totalPriceDisplay').innerText = "Rp 0";
                 document.getElementById('strikePriceDisplay').style.display = 'none';
                 document.getElementById('checkoutBtn').disabled = true;
-                
                 document.getElementById('mobileCartBadge').style.display = 'none';
                 document.getElementById('cartBadge').style.display = 'none';
                 return;
@@ -504,22 +488,37 @@
 
             container.innerHTML = '';
             let total = 0;
+
             cartItems.forEach(item => {
-                const rawPrice = parsePrice(item.product_price);
+                // 🛡️ SOLUSI ENTERPRISE: Mencari harga ASLI dari katalog produk
+                const realProduct = allProducts.find(p => String(p.id) === String(item.product_id));
+                
+                let displayPrice = item.product_price || "0";
+                let displayName = item.product_name || "Data Lama/Rusak";
+                let displayImg = item.product_img || 'https://placehold.co/70x70/e0e5ec/a3b1c6?text=Barang';
+
+                // Jika barang ditemukan di database utama, TIMPA harganya agar selalu 100% akurat!
+                if (realProduct) {
+                    displayName = realProduct.title;
+                    displayImg = realProduct.img;
+                    displayPrice = (realProduct.is_promo && realProduct.promo_price) ? realProduct.promo_price : realProduct.price;
+                    
+                    // Simpan kembali ke memory agar saat dikirim ke checkout, datanya sempurna
+                    item.product_name = displayName;
+                    item.product_price = displayPrice;
+                }
+
+                const rawPrice = parsePrice(displayPrice);
                 total += (rawPrice * item.quantity);
                 
-                const imgUrl = (item.product_img && item.product_img !== "undefined" && String(item.product_img).startsWith('http')) 
-                                ? item.product_img : 'https://placehold.co/70x70/e0e5ec/a3b1c6?text=Barang';
-
-                const safeName = (item.product_name && item.product_name !== "undefined") ? item.product_name : "Data Rusak (Harap Hapus Barang Ini)";
-                const safePriceHTML = rawPrice > 0 ? formatRupiah(rawPrice) : "<span style='color:#ff4757; font-size:12px;'>Harga Error</span>";
+                const safePriceHTML = rawPrice > 0 ? formatRupiah(rawPrice) : "<span style='color:#ff4757; font-size:12px;'>Katalog Tidak Ditemukan</span>";
 
                 const card = document.createElement('div');
                 card.className = 'cart-card';
                 card.innerHTML = `
-                    <img src="${safeURL(imgUrl)}" class="cart-img" alt="Produk">
+                    <img src="${safeURL(displayImg)}" class="cart-img" alt="Produk">
                     <div class="cart-details">
-                        <div class="cart-title">${escapeHTML(safeName)}</div>
+                        <div class="cart-title">${escapeHTML(displayName)}</div>
                         <div class="cart-price">${safePriceHTML}</div>
                         <div class="cart-actions-inline">
                             <div class="qty-control">
@@ -546,27 +545,24 @@
             document.getElementById('checkoutBtn').disabled = (finalTotalRp === 0 && cartItems.length > 0);
             
             const totalQty = cartItems.reduce((s, i) => s + i.quantity, 0);
-            document.getElementById('mobileCartBadge').style.display = totalQty > 0 ? 'flex' : 'none';
-            document.getElementById('mobileCartBadge').innerText = totalQty > 99 ? '99+' : totalQty;
+            const badgeText = totalQty > 99 ? '99+' : totalQty;
+            
             document.getElementById('cartBadge').style.display = totalQty > 0 ? 'flex' : 'none';
-            document.getElementById('cartBadge').innerText = totalQty > 99 ? '99+' : totalQty;
+            document.getElementById('cartBadge').innerText = badgeText;
+            if(document.getElementById('mobileCartBadge')) {
+                document.getElementById('mobileCartBadge').style.display = totalQty > 0 ? 'flex' : 'none';
+                document.getElementById('mobileCartBadge').innerText = badgeText;
+            }
         }
 
         async function loadCart() {
             try {
                 const res = await fetch(`${BASE_URL}/api/cart`, { headers: { 'Authorization': `Bearer ${session.access_token}` } });
-                if (!res.ok) {
-                    if (res.status === 401 || res.status === 403) throw new Error("Sesi");
-                    throw new Error("Gagal load keranjang");
-                }
+                if (!res.ok) throw new Error("Gagal load keranjang");
                 cartItems = await res.json();
                 renderCartItems();
             } catch (error) {
-                if (error.message.includes("Sesi")) {
-                    handleLogout();
-                } else {
-                    document.getElementById('cartContainer').innerHTML = `<div class="empty-cart"><i class="fas fa-exclamation-triangle fa-3x" style="color:#ff4757;"></i><br><br>Gagal memuat keranjang.<br>Periksa koneksi backend Anda.</div>`;
-                }
+                document.getElementById('cartContainer').innerHTML = `<div class="empty-cart"><i class="fas fa-exclamation-triangle fa-3x" style="color:#ff4757;"></i><br><br>Gagal memuat keranjang.</div>`;
             }
         }
 
@@ -575,30 +571,25 @@
             if(!i) return;
             const newQty = i.quantity + delta;
             
-            if(newQty < 1) {
-                return confirmDelete(id);
-            }
+            if(newQty < 1) return confirmDelete(id);
             
             i.quantity = newQty;
             renderCartItems(); 
             
             try {
+                const safeProductId = isNaN(i.product_id) ? i.product_id : Number(i.product_id);
                 await fetch(`${BASE_URL}/api/cart`, { 
                     method: 'POST', 
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
-                    // PERBAIKAN: Kirim ID utuh tanpa dipaksa jadi Angka
-                    body: JSON.stringify({ product_id: i.product_id, quantity: delta }) 
+                    body: JSON.stringify({ product_id: safeProductId, quantity: delta }) 
                 });
-            } catch (e) {
-                console.error("Gagal sinkron qty server");
-            }
+            } catch (e) { }
         }
 
         function confirmDelete(id) { 
             itemToDelete = id; 
             document.getElementById('confirmDeleteModal').classList.add('active'); 
         }
-        
         function closeDeleteModal() { 
             itemToDelete = null; 
             document.getElementById('confirmDeleteModal').classList.remove('active'); 
@@ -606,39 +597,38 @@
         
         async function executeDelete() {
             if(!itemToDelete) return;
-            const id = itemToDelete;
+            const idTarget = String(itemToDelete); // Simpan ID dalam format String untuk frontend
             closeDeleteModal();
             try {
+                // 🛡️ SOLUSI HAPUS: Cek otomatis apakah ID berupa Angka atau UUID, agar Rust puas
+                const safeIdPayload = isNaN(itemToDelete) ? itemToDelete : Number(itemToDelete);
+                
                 const res = await fetch(`${BASE_URL}/api/cart`, { 
                     method: 'DELETE', 
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
-                    // PERBAIKAN: Kirim ID utuh tanpa dipaksa jadi Angka
-                    body: JSON.stringify({ id: id }) 
+                    body: JSON.stringify({ id: safeIdPayload }) 
                 });
                 
                 if (!res.ok) throw new Error();
                 
-                cartItems = cartItems.filter(x => String(x.id) !== String(id));
+                // Berhasil! Hapus dari layar.
+                cartItems = cartItems.filter(x => String(x.id) !== idTarget);
                 renderCartItems();
             } catch (e) { 
-                showNotification("Gagal", "Gagal menghapus barang", "error"); 
+                showNotification("Gagal", "Gagal menghapus barang.", "error"); 
             }
         }
 
+        // --- SISTEM ALAMAT ---
         function openAddressModal() { 
             document.getElementById('modalShipAddress').value = globalAddress; 
             document.getElementById('modalShipPhone').value = globalPhone; 
             document.getElementById('addressModal').classList.add('active'); 
         }
-        
-        function closeAddressModal() { 
-            document.getElementById('addressModal').classList.remove('active'); 
-        }
-        
+        function closeAddressModal() { document.getElementById('addressModal').classList.remove('active'); }
         function saveAddressInfo() { 
             globalAddress = document.getElementById('modalShipAddress').value.trim(); 
             globalPhone = document.getElementById('modalShipPhone').value.trim(); 
-            
             if(globalAddress && globalPhone) {
                 document.getElementById('summaryAddressVal').innerText = "Sudah Sesuai"; 
             } else {
@@ -647,33 +637,26 @@
             closeAddressModal(); 
         }
 
+        // --- SISTEM VOUCHER PROMO ---
         function openPromoModal() { 
             document.getElementById('promoModal').classList.add('active'); 
             document.getElementById('modalVoucherMsg').innerText = ''; 
             loadAvailableVouchers(); 
         }
-        
-        function closePromoModal() { 
-            document.getElementById('promoModal').classList.remove('active'); 
-        }
+        function closePromoModal() { document.getElementById('promoModal').classList.remove('active'); }
 
         async function loadAvailableVouchers() {
             const container = document.getElementById('availablePromosContainer');
             container.innerHTML = '<div style="text-align:center; font-size:12px; color:var(--text-muted);"><i class="fas fa-spinner fa-spin"></i> Mencari promo...</div>';
-            
             try {
                 const res = await fetch(`${BASE_URL}/api/vouchers`, { headers: { 'Authorization': `Bearer ${session.access_token}` } });
-                
-                if (!res.ok) throw new Error('API Gagal merespon');
+                if (!res.ok) throw new Error('Error');
                 const list = await res.json();
-                
                 container.innerHTML = '';
-                
                 if (list.length === 0) {
-                    container.innerHTML = '<div style="text-align:center; font-size:11px; color:var(--text-muted); padding: 15px 0;">Maaf, belum ada promo yang tersedia.</div>';
+                    container.innerHTML = '<div style="text-align:center; font-size:11px; color:var(--text-muted); padding: 15px 0;">Belum ada promo tersedia.</div>';
                     return;
                 }
-                
                 list.forEach(v => {
                     const isUsed = activeVouchers.some(x => x.code === v.code);
                     container.innerHTML += `
@@ -686,102 +669,71 @@
                         </div>`;
                 });
             } catch (error) {
-                container.innerHTML = '<div style="text-align:center; font-size:11px; color:#ff4757; padding: 15px 0;">Gagal memuat daftar promo.</div>';
+                container.innerHTML = '<div style="text-align:center; font-size:11px; color:#ff4757; padding: 15px 0;">Gagal memuat promo.</div>';
             }
         }
 
         function resetVoucher() { 
-            activeVouchers = []; 
-            appliedDiscount = 0; 
-            finalTotalRp = rawSubtotal; 
-            
+            activeVouchers = []; appliedDiscount = 0; finalTotalRp = rawSubtotal; 
             document.getElementById('promoSummaryBtn').classList.remove('active-promo'); 
             document.getElementById('summaryPromoVal').innerText = "Maksimal 2"; 
             document.getElementById('summaryPromoVal').style.color = ""; 
-            
-            renderCartItems(); 
-            closePromoModal();
-            showNotification("Promo Direset", "Semua potongan promo telah dibatalkan.", "success");
+            renderCartItems(); closePromoModal();
+            showNotification("Promo Direset", "Semua potongan promo dibatalkan.", "success");
         }
 
         function applyVoucherManual() {
             const code = document.getElementById('manualVoucherInput').value.trim();
-            if(code) { 
-                executePromo(code); 
-                document.getElementById('manualVoucherInput').value = ''; 
-            }
+            if(code) { executePromo(code); document.getElementById('manualVoucherInput').value = ''; }
         }
 
         async function executePromo(code) {
             if(rawSubtotal === 0) return showNotification("Keranjang Kosong", "Masukkan barang ke keranjang terlebih dahulu.", "warning");
-            if(activeVouchers.length >= 2) return showNotification("Batas Maksimal", "Anda hanya dapat menggunakan maksimal 2 promo sekaligus.", "warning");
+            if(activeVouchers.length >= 2) return showNotification("Batas Maksimal", "Hanya dapat menggunakan maksimal 2 promo sekaligus.", "warning");
             if(activeVouchers.some(v => v.code === code)) return;
 
             const msgBox = document.getElementById('modalVoucherMsg');
             const btnManual = document.getElementById('btnApplyManual');
             
-            msgBox.innerText = "Memeriksa kode promo...";
-            msgBox.style.color = "var(--accent-color)";
-            btnManual.disabled = true;
+            msgBox.innerText = "Memeriksa kode..."; msgBox.style.color = "var(--accent-color)"; btnManual.disabled = true;
 
             try {
                 const res = await fetch(`${BASE_URL}/api/apply-voucher`, { 
                     method: 'POST', 
-                    headers: { 
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${session.access_token}`
-                    }, 
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
                     body: JSON.stringify({ code, total_price: rawSubtotal }) 
                 });
                 
                 const result = await res.json();
-                
-                if(!res.ok) {
-                    msgBox.innerText = result.error;
-                    msgBox.style.color = "#ff4757";
-                    return;
-                }
+                if(!res.ok) { msgBox.innerText = result.error; msgBox.style.color = "#ff4757"; return; }
 
                 const discountReturned = parseInt(result.discount_amount) || 0;
-
                 if (discountReturned === 0) {
                     closePromoModal();
-                    showNotification(
-                        "Konfigurasi Promo Gagal", 
-                        `Sistem mendeteksi kode ${code} valid, namun potongan diskon Rp 0. Periksa setelan di database.`, 
-                        "warning"
-                    );
+                    showNotification("Promo Gagal", `Kode ${code} valid, namun potongan Rp 0.`, "warning");
                     return;
                 }
 
                 activeVouchers.push({ code, discount: discountReturned });
-                applyPromoMath();
-                
-                closePromoModal();
+                applyPromoMath(); closePromoModal();
                 showNotification("Berhasil", `Promo ${code} berhasil dipakai! Diskon: ${formatRupiah(discountReturned)}`, "success");
             } catch (error) {
-                msgBox.innerText = "Terjadi kesalahan jaringan/sistem.";
-                msgBox.style.color = "#ff4757";
-            } finally {
-                btnManual.disabled = false;
-            }
+                msgBox.innerText = "Terjadi kesalahan sistem."; msgBox.style.color = "#ff4757";
+            } finally { btnManual.disabled = false; }
         }
 
         async function syncPromosAndApply() {
             for (let i = 0; i < activeVouchers.length; i++) {
                 try {
                     const res = await fetch(`${BASE_URL}/api/apply-voucher`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+                        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
                         body: JSON.stringify({ code: activeVouchers[i].code, total_price: rawSubtotal })
                     });
                     if (res.ok) {
                         const result = await res.json();
                         activeVouchers[i].discount = parseInt(result.discount_amount) || 0;
                     }
-                } catch (e) {
-                    console.error("Gagal sinkron ulang diskon:", e);
-                }
+                } catch (e) {}
             }
             applyPromoMath();
         }
@@ -789,12 +741,9 @@
         function applyPromoMath() {
             let disc = 0;
             activeVouchers.forEach(v => disc += v.discount);
-            
             if (disc > rawSubtotal) disc = rawSubtotal;
-            
             appliedDiscount = disc;
             finalTotalRp = rawSubtotal - appliedDiscount;
-            
             updatePromoUI();
         }
 
@@ -805,56 +754,44 @@
             document.getElementById('summaryPromoVal').style.color = "#27ae60";
             
             const strikeDisplay = document.getElementById('strikePriceDisplay');
-            
             if (appliedDiscount > 0) {
-                strikeDisplay.style.display = 'block';
-                strikeDisplay.innerText = formatRupiah(rawSubtotal);
+                strikeDisplay.style.display = 'block'; strikeDisplay.innerText = formatRupiah(rawSubtotal);
             } else {
                 strikeDisplay.style.display = 'none';
             }
-            
             document.getElementById('totalPriceDisplay').innerText = formatRupiah(finalTotalRp);
         }
 
         function processCheckout() {
-            if(!globalAddress || !globalPhone) {
-                return showNotification("Alamat Belum Lengkap", "Harap atur dan simpan Alamat Pengiriman dan No WA Anda terlebih dahulu.", "warning");
-            }
-            
+            if(!globalAddress || !globalPhone) return showNotification("Alamat Belum Lengkap", "Harap atur Alamat Pengiriman dan No WA Anda terlebih dahulu.", "warning");
             document.getElementById('confirmAddressDisplay').innerText = globalAddress + "\n(Telp: " + globalPhone + ")";
             document.getElementById('confirmCheckoutModal').classList.add('active');
         }
         
-        function closeConfirmModal() { 
-            document.getElementById('confirmCheckoutModal').classList.remove('active'); 
-        }
+        function closeConfirmModal() { document.getElementById('confirmCheckoutModal').classList.remove('active'); }
         
         async function executeCheckout() {
             closeConfirmModal();
             const btn = document.getElementById('checkoutBtn');
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Memproses...';
-            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Memproses...'; btn.disabled = true;
             
             try {
                 const voucherCodes = activeVouchers.map(v => v.code);
-                
+                const payloadItems = cartItems.map(x => ({
+                    product_id: isNaN(x.product_id) ? x.product_id : Number(x.product_id),
+                    quantity: Number(x.quantity),
+                    product_name: String(x.product_name),
+                    product_price: String(x.product_price)
+                }));
+
                 const res = await fetch(`${BASE_URL}/api/checkout`, { 
                     method: 'POST', 
-                    headers: { 
-                        'Content-Type': 'application/json', 
-                        'Authorization': `Bearer ${session.access_token}` 
-                    }, 
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
                     body: JSON.stringify({ 
                         shipping_address: globalAddress, 
                         phone_number: globalPhone, 
                         total_price: formatRupiah(finalTotalRp), 
-                        // PERBAIKAN: Kirim ID utuh tanpa dipaksa jadi Angka
-                        items: cartItems.map(x => ({
-                            product_id: x.product_id,
-                            quantity: Number(x.quantity),
-                            product_name: String(x.product_name),
-                            product_price: String(x.product_price)
-                        })),
+                        items: payloadItems,
                         used_vouchers: voucherCodes
                     }) 
                 });
@@ -862,15 +799,10 @@
                 const result = await res.json();
                 if(!res.ok) throw new Error(result.error || "Gagal memproses pesanan."); 
                 
-                const safeTitle = "Pesanan Berhasil!";
-                const safeMsg = result.message || "Terima kasih! Pesanan Anda sedang diproses oleh tim kami.";
-                
-                showNotification(safeTitle, safeMsg, "success", "index.html");
-                
+                showNotification("Pesanan Berhasil!", result.message || "Pesanan Anda sedang diproses.", "success", "index.html");
             } catch(e) {
                 showNotification("Checkout Gagal", e.message, "error");
-                btn.innerText = "Buat Pesanan";
-                btn.disabled = false;
+                btn.innerText = "Buat Pesanan"; btn.disabled = false;
             }
         }
 
@@ -884,8 +816,10 @@
             document.getElementById('switchIcon').classList.replace(isDark ? 'fa-moon' : 'fa-sun', isDark ? 'fa-sun' : 'fa-moon');
         });
 
-        window.addEventListener('DOMContentLoaded', () => { 
+        // 🚀 INI KUNCI UTAMANYA: Mengunduh katalog produk terlebih dahulu sebelum memuat keranjang
+        window.addEventListener('DOMContentLoaded', async () => { 
             updateNavUI(); 
+            await fetchProductsCatalog(); 
             loadCart(); 
         });
     </script>

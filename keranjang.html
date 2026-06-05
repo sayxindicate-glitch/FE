@@ -589,26 +589,42 @@
             const originalItem = cartItems.find(x => String(x.id) === String(htmlId));
             if(!originalItem) return;
 
-            const newQty = originalItem.quantity + delta;
-            if(newQty < 1) return confirmDelete(htmlId);
+            // PROTEKSI 1: Paksa konversi ke angka mutlak (integer) agar tidak ada bug "2" + -1 = "2-1"
+            const currentQty = parseInt(originalItem.quantity) || 0;
+            const parsedDelta = parseInt(delta) || 0;
+            const newQty = currentQty + parsedDelta;
+            
+            // PROTEKSI 2: Jika kuantitas turun ke 0, hentikan pengiriman ke server dan buka Modal Hapus
+            if(newQty < 1) {
+                return confirmDelete(htmlId);
+            }
 
+            // Update memori lokal dan refresh UI secara instan
             originalItem.quantity = newQty;
             renderCartItems(); 
 
+            // Kunci tombol checkout sementara agar user tidak checkout saat data sedang disinkronkan
             const checkoutBtn = document.getElementById('checkoutBtn');
             if (checkoutBtn) {
                 checkoutBtn.disabled = true;
                 checkoutBtn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Menyinkronkan...';
             }
             
-            if (!pendingDeltas[htmlId]) pendingDeltas[htmlId] = 0;
-            pendingDeltas[htmlId] += delta;
+            // PROTEKSI 3: Perbaikan deteksi variabel antrean (menghindari bug angka minus)
+            if (typeof pendingDeltas[htmlId] === 'undefined') {
+                pendingDeltas[htmlId] = 0;
+            }
+            pendingDeltas[htmlId] += parsedDelta;
 
-            if (syncTimeout[htmlId]) clearTimeout(syncTimeout[htmlId]);
+            // Bersihkan timer lama jika user menekan tombol plus/minus beruntun dengan cepat
+            if (syncTimeout[htmlId]) {
+                clearTimeout(syncTimeout[htmlId]);
+            }
 
+            // Pasang timer baru (600 milidetik setelah klik terakhir)
             syncTimeout[htmlId] = setTimeout(async () => {
                 const accumulatedDelta = pendingDeltas[htmlId];
-                pendingDeltas[htmlId] = 0; 
+                pendingDeltas[htmlId] = 0; // Reset antrean
                 delete syncTimeout[htmlId];
 
                 if (accumulatedDelta !== 0) {
@@ -620,60 +636,41 @@
                         let correctImg = realProduct ? realProduct.img : (originalItem.product_img || "");
                         const safeProductId = isNaN(originalItem.product_id) ? originalItem.product_id : Number(originalItem.product_id);
 
-                        if (accumulatedDelta > 0) {
-                            // JIKA DITAMBAH: Rust mengizinkan penambahan (angka positif)
-                            const res = await fetch(`${BASE_URL}/api/cart`, { 
-                                method: 'POST', 
-                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
-                                body: JSON.stringify({ 
-                                    product_id: safeProductId, 
-                                    quantity: Number(accumulatedDelta),
-                                    product_name: String(correctName),
-                                    product_price: Number(correctPrice), 
-                                    product_img: String(correctImg)
-                                }) 
-                            });
-                            if (!res.ok) throw new Error("Ditolak Server");
-                        } else {
-                            // JIKA DIKURANG: Jurus Rahasia! Hapus sepenuhnya, lalu masukkan nilai absolut baru.
-                            const delRes = await fetch(`${BASE_URL}/api/cart`, {
-                                method: 'DELETE',
-                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-                                body: JSON.stringify({ id: originalItem.id })
-                            });
-                            if (!delRes.ok) throw new Error("Gagal menghapus cache");
-
-                            const postRes = await fetch(`${BASE_URL}/api/cart`, { 
-                                method: 'POST', 
-                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` }, 
-                                body: JSON.stringify({ 
-                                    product_id: safeProductId, 
-                                    // Kita masukkan total quantity baru (contoh: jadi 3), ini BUKAN angka negatif!
-                                    quantity: Number(originalItem.quantity), 
-                                    product_name: String(correctName),
-                                    product_price: Number(correctPrice), 
-                                    product_img: String(correctImg)
-                                }) 
-                            });
-                            if (!postRes.ok) throw new Error("Gagal menyuntikkan data baru");
-                            
-                            // Tarik ID terbaru dari server agar klik minus selanjutnya tidak error
-                            await loadCartSilently();
+                        // Kirim satu request FETCH bersih (angka minus/plus) ke Rust Backend
+                        const res = await fetch(`${BASE_URL}/api/cart`, { 
+                            method: 'POST', 
+                            headers: { 
+                                'Content-Type': 'application/json', 
+                                'Authorization': `Bearer ${session.access_token}` 
+                            }, 
+                            body: JSON.stringify({ 
+                                product_id: safeProductId, 
+                                quantity: accumulatedDelta, // Langsung kirim delta yang tertumpuk
+                                product_name: String(correctName),
+                                product_price: Number(correctPrice), 
+                                product_img: String(correctImg)
+                            }) 
+                        });
+                        
+                        if (!res.ok) {
+                            throw new Error("Ditolak Server");
                         }
                     } catch (e) {
                         console.error("Gagal menyinkronkan data", e);
                         showNotification("Kesalahan Sinkronisasi", "Gagal memperbarui jumlah. Halaman akan dimuat ulang.", "error");
                         setTimeout(() => window.location.reload(), 1500);
+                    } finally {
+                        // Pastikan request dikurangi terlepas dari sukses atau gagal
+                        activeNetworkRequests--;
                     }
-                    activeNetworkRequests--;
                 }
 
-                // Kembalikan tombol jika semua proses selesai
+                // Kembalikan tombol pesanan HANYA JIKA semua antrean selesai
                 if (Object.keys(syncTimeout).length === 0 && activeNetworkRequests === 0) {
-                    const checkoutBtn = document.getElementById('checkoutBtn');
-                    if (checkoutBtn) {
-                        checkoutBtn.disabled = (finalTotalRp === 0 && cartItems.length > 0);
-                        checkoutBtn.innerHTML = 'Buat Pesanan';
+                    const btn = document.getElementById('checkoutBtn');
+                    if (btn) {
+                        btn.disabled = (finalTotalRp === 0 && cartItems.length > 0);
+                        btn.innerHTML = 'Buat Pesanan';
                     }
                 }
             }, 600); 

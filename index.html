@@ -155,8 +155,11 @@
         .modal-title-box h2 { font-size: 20px; font-weight: 700; color: var(--accent-color); margin-bottom: 5px; line-height: 1.3; }
         .modal-close { background: var(--bg-color); border: none; width: 35px; height: 35px; border-radius: 50%; font-size: 16px; color: var(--text-main); box-shadow: var(--neu-flat-sm); cursor: pointer; display: flex; justify-content: center; align-items: center; flex-shrink: 0; }
         .modal-close:active { box-shadow: var(--neu-pressed-sm); color: #ff4757; }
-        .modal-img-box { width: 100%; height: 180px; border-radius: 15px; background: var(--bg-color); box-shadow: var(--neu-pressed); margin-bottom: 15px; display: flex; justify-content: center; align-items: center; overflow: hidden; }
+        
+        /* UPGRADE: Relatif untuk wadah tombol galeri */
+        .modal-img-box { position: relative; width: 100%; height: 180px; border-radius: 15px; background: var(--bg-color); box-shadow: var(--neu-pressed); margin-bottom: 15px; display: flex; justify-content: center; align-items: center; overflow: hidden; }
         .modal-img-box img { width: 100%; height: 100%; object-fit: cover; }
+        
         .modal-price { font-size: 26px; font-weight: 700; color: var(--accent-color); margin-bottom: 10px; }
         .modal-desc-label { font-size: 15px; font-weight: 700; margin-bottom: 8px; color: var(--text-main); }
         .modal-desc-text { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 15px; overflow-y: auto; flex-grow: 1; padding-right: 10px; }
@@ -395,7 +398,14 @@
                 <div class="modal-title-box"><h2 id="modalTitle">Nama Barang</h2></div>
                 <button class="modal-close" onclick="closeModal()"><i class="fas fa-times"></i></button>
             </div>
-            <div class="modal-img-box"><img id="modalImg" src="" alt="Produk Grosir"></div>
+            
+            <div class="modal-img-box">
+                <img id="modalImg" src="" alt="Produk Grosir">
+                <button id="modalPrevBtn" class="qty-btn" style="position: absolute; left: 10px; display: none; opacity: 0.85;"><i class="fas fa-chevron-left"></i></button>
+                <button id="modalNextBtn" class="qty-btn" style="position: absolute; right: 10px; display: none; opacity: 0.85;"><i class="fas fa-chevron-right"></i></button>
+                <div id="modalImgIndicator" style="position: absolute; bottom: 10px; background: var(--bg-color); color: var(--text-main); padding: 4px 12px; border-radius: 50px; font-size: 11px; font-weight: 700; box-shadow: var(--neu-flat-sm); display: none; opacity: 0.9;">1 / 1</div>
+            </div>
+            
             <div class="modal-price" id="modalPrice">Rp 0</div>
             <div class="modal-desc-label">Deskripsi Barang:</div>
             <div class="modal-desc-text" id="modalDesc">Isi deskripsi produk.</div>
@@ -427,7 +437,7 @@
         const BASE_URL = isLocalhost ? 'http://127.0.0.1:10000' : '';
 
         // =========================================================================
-        // SECURITY PATCH: KUNCI LINGKUNGAN JAVASCRIPT & SANITASI
+        // SECURITY PATCH (UPGRADED): KUNCI LINGKUNGAN JAVASCRIPT & URL SANITIZER
         // =========================================================================
         Object.freeze(Object.prototype);
 
@@ -448,13 +458,23 @@
             );
         }
 
+        // UPGRADE KEAMANAN: Memastikan proteksi mutlak dari XSS via gambar (misal `javascript:alert(1)`)
         function safeURL(url) {
-            if (!url) return 'https://placehold.co/100x100/e0e5ec/a3b1c6?text=Foto';
-            const strUrl = String(url).trim();
-            if (strUrl.startsWith('http://') || strUrl.startsWith('https://') || strUrl.startsWith('/') || strUrl.startsWith('./') || strUrl.startsWith('../')) {
-                return escapeHTML(strUrl);
+            if (!url) return 'https://placehold.co/400x400/e0e5ec/a3b1c6?text=Foto';
+            try {
+                // Memanfaatkan URL Constructor API browser untuk memvalidasi
+                const parsedUrl = new URL(url, window.location.origin);
+                if (['http:', 'https:'].includes(parsedUrl.protocol)) {
+                    return escapeHTML(parsedUrl.href);
+                }
+            } catch (e) {
+                // Tangani khusus untuk relative URLs
+                const strUrl = String(url).trim();
+                if (strUrl.startsWith('/') || strUrl.startsWith('./') || strUrl.startsWith('../')) {
+                    return escapeHTML(strUrl);
+                }
             }
-            return '#'; 
+            return 'https://placehold.co/400x400/e0e5ec/a3b1c6?text=Invalid+URL'; 
         }
         // =========================================================================
 
@@ -486,6 +506,10 @@
 
         let currentCategory = "Semua Barang";
         let activeTags = [];
+
+        // Variabel untuk Galeri Foto Modal
+        let currentImageIndex = 0;
+        let modalImages = [];
 
         const categoryContainer = document.getElementById('categoryContainer');
         const productContainer = document.getElementById('productContainer');
@@ -841,7 +865,11 @@
                 const qtyId = `qty-${prod.id}`; 
                 const isPromoActive = prod.is_promo && prod.promo_price;
                 
-                const safeImg = safeURL(prod.img); 
+                // UPGRADE: Deteksi Array dan gunakan foto index ke-0 sebagai Thumbnail Grid Utama
+                const imgArray = Array.isArray(prod.img) ? prod.img : [prod.img];
+                const firstImg = imgArray.length > 0 && imgArray[0] ? imgArray[0] : null;
+                const safeImg = safeURL(firstImg); 
+                
                 const safeTitle = escapeHTML(prod.title);
                 const safeInfo = escapeHTML(prod.info);
                 const safePrice = escapeHTML(prod.price);
@@ -967,20 +995,17 @@
                 return;
             }
             
-            // 🛡️ SECURITY PATCH: ANTI-SPAM (Mencegah klik beruntun / Race Condition)
             let btn;
             let originalHtml = '';
             if (event && event.currentTarget && (event.currentTarget.tagName === 'BUTTON' || event.currentTarget.classList.contains('neu-btn'))) {
                 btn = event.currentTarget;
-                if (btn.disabled) return; // Hentikan jika sedang memproses data
+                if (btn.disabled) return; 
                 btn.disabled = true;
                 originalHtml = btn.innerHTML;
                 btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
             }
 
             const session = JSON.parse(sessionData);
-            
-            // 🛡️ PATCH: Memastikan pencarian produk 100% akurat walau tipe datanya berbeda
             const prod = allProducts.find(p => String(p.id) === String(productId));
             
             if (!prod) {
@@ -1003,7 +1028,6 @@
             }
 
             try {
-                // 🛡️ PATCH: Paksa ID Produk menjadi Angka (Number) agar relasi harga di Database tidak rusak (0.0)
                 const cleanProductId = isNaN(prod.id) ? prod.id : Number(prod.id);
 
                 const response = await fetch(`${BASE_URL}/api/cart`, {
@@ -1023,7 +1047,6 @@
                     throw new Error(err.error || err.message || "Gagal terhubung ke Database");
                 }
 
-                // 🛡️ PATCH: Hanya tambahkan angka di ikon keranjang JIKA database sukses menyimpan
                 const currentBadge = document.getElementById('cartBadge').innerText;
                 let currentTotal = parseInt(currentBadge) || 0;
                 if (currentBadge === '99+') currentTotal = 99; 
@@ -1040,7 +1063,6 @@
                     showNotification("Gagal Memasukkan Barang", "Pesan: " + error.message, "error");
                 }
             } finally {
-                // Kembalikan tombol "Beli" ke keadaan semula setelah proses selesai
                 if (btn) {
                     btn.disabled = false;
                     btn.innerHTML = originalHtml;
@@ -1130,11 +1152,49 @@
         };
 
         const modal = document.getElementById('productModal');
+        
+        // UPGRADE: Fungsi Buka Modal yang mendukung banyak gambar
         window.openModal = function(productId) {
             const prod = allProducts.find(p => p.id == productId); 
             if(prod) {
                 document.getElementById('modalTitle').innerText = prod.title; 
-                document.getElementById('modalImg').src = safeURL(prod.img); 
+                
+                // Ekstrak & amankan array gambar
+                modalImages = Array.isArray(prod.img) ? prod.img : [prod.img];
+                modalImages = modalImages.filter(img => img); // bersihkan jika ada slot null
+                if(modalImages.length === 0) modalImages = [null];
+                currentImageIndex = 0;
+                
+                const modalImgEl = document.getElementById('modalImg');
+                const prevBtn = document.getElementById('modalPrevBtn');
+                const nextBtn = document.getElementById('modalNextBtn');
+                const indicator = document.getElementById('modalImgIndicator');
+                
+                // Tampilkan foto pertama
+                modalImgEl.src = safeURL(modalImages[currentImageIndex]);
+                
+                // Jika foto > 1, munculkan tombol navigasi
+                if(modalImages.length > 1) {
+                    prevBtn.style.display = 'flex';
+                    nextBtn.style.display = 'flex';
+                    indicator.style.display = 'block';
+                    indicator.innerText = `1 / ${modalImages.length}`;
+                    
+                    prevBtn.onclick = () => {
+                        currentImageIndex = (currentImageIndex - 1 + modalImages.length) % modalImages.length;
+                        modalImgEl.src = safeURL(modalImages[currentImageIndex]);
+                        indicator.innerText = `${currentImageIndex + 1} / ${modalImages.length}`;
+                    };
+                    nextBtn.onclick = () => {
+                        currentImageIndex = (currentImageIndex + 1) % modalImages.length;
+                        modalImgEl.src = safeURL(modalImages[currentImageIndex]);
+                        indicator.innerText = `${currentImageIndex + 1} / ${modalImages.length}`;
+                    };
+                } else {
+                    prevBtn.style.display = 'none';
+                    nextBtn.style.display = 'none';
+                    indicator.style.display = 'none';
+                }
                 
                 const isPromoActive = prod.is_promo && prod.promo_price;
                 const safePrice = escapeHTML(prod.price);
@@ -1156,10 +1216,12 @@
                 document.getElementById('modalDesc').scrollTop = 0;
             }
         }
+        
         window.closeModal = function() {
             modal.classList.remove('active');
             document.body.style.overflow = 'auto'; 
         }
+        
         modal.addEventListener('click', (e) => {
             if (e.target === modal) closeModal();
         });

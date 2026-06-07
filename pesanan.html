@@ -343,7 +343,7 @@
         "use strict";
 
         // =========================================================================
-        // SECURITY PATCH: KUNCI LINGKUNGAN JAVASCRIPT & SANITASI
+        // SECURITY PATCH (UPGRADED): KUNCI LINGKUNGAN JAVASCRIPT & URL SANITIZER
         // =========================================================================
         Object.freeze(Object.prototype);
 
@@ -364,13 +364,30 @@
             );
         }
 
+        // UPGRADE KEAMANAN: Menggunakan URL API untuk memblokir injeksi XSS (javascript: URL)
         function safeURL(url) {
-            if (!url) return 'https://placehold.co/60x60/e0e5ec/a3b1c6?text=GG';
-            const strUrl = String(url).trim();
-            if (strUrl.startsWith('http://') || strUrl.startsWith('https://') || strUrl.startsWith('/') || strUrl.startsWith('./') || strUrl.startsWith('../')) {
-                return escapeHTML(strUrl);
+            if (!url) return 'https://placehold.co/60x60/e0e5ec/a3b1c6?text=Bakoel';
+            try {
+                const parsedUrl = new URL(url, window.location.origin);
+                if (['http:', 'https:'].includes(parsedUrl.protocol)) {
+                    return escapeHTML(parsedUrl.href);
+                }
+            } catch (e) {
+                const strUrl = String(url).trim();
+                if (strUrl.startsWith('/') || strUrl.startsWith('./') || strUrl.startsWith('../')) {
+                    return escapeHTML(strUrl);
+                }
             }
-            return 'https://placehold.co/60x60/e0e5ec/a3b1c6?text=GG'; 
+            return 'https://placehold.co/60x60/e0e5ec/a3b1c6?text=Bakoel'; 
+        }
+
+        // UPGRADE SISTEM: Mengekstrak aman jika foto dibungkus ke dalam Array (hanya memanggil index pertama)
+        function extractImg(item) {
+            let imgData = item.product_img || item.img || item.image || item.img_url;
+            if (Array.isArray(imgData)) {
+                return imgData.length > 0 ? imgData[0] : null;
+            }
+            return imgData;
         }
         // =========================================================================
 
@@ -635,7 +652,10 @@
                 
                 if (items.length > 0) {
                     const firstItem = items[0];
-                    const safeFirstImg = safeURL(firstItem.product_img || firstItem.img || firstItem.image || firstItem.img_url);
+                    
+                    // PENYESUAIAN: Menggunakan fungsi extractImg untuk membaca Array aman
+                    const safeFirstImg = safeURL(extractImg(firstItem));
+                    
                     const safeFirstName = escapeHTML(firstItem.product_name || firstItem.title || firstItem.name || 'Barang Belanjaan');
                     const safeFirstQty = parseInt(firstItem.quantity) || 1;
                     const safeFirstPriceRaw = parseFloat(firstItem.product_price || firstItem.price_at_buy || firstItem.price || 0);
@@ -657,7 +677,10 @@
                         
                         for (let i = 1; i < items.length; i++) {
                             const currItem = items[i];
-                            const safeCurrImg = safeURL(currItem.product_img || currItem.img || currItem.image || currItem.img_url);
+                            
+                            // PENYESUAIAN: Menggunakan fungsi extractImg untuk membaca Array aman
+                            const safeCurrImg = safeURL(extractImg(currItem));
+                            
                             const safeCurrName = escapeHTML(currItem.product_name || currItem.title || currItem.name || 'Barang Belanjaan');
                             const safeCurrQty = parseInt(currItem.quantity) || 1;
                             const safeCurrPriceRaw = parseFloat(currItem.product_price || currItem.price_at_buy || currItem.price || 0);
